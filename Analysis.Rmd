@@ -1,0 +1,405 @@
+---
+title: "COGO Bikes"
+author: "Trevin Flickinger"
+date: "10/30/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(lubridate)
+library(ggthemes)
+theme_set(theme_fivethirtyeight())
+```
+
+# Load the bike data adata
+
+```{r, message = FALSE, warning = FALSE}
+cogo <- read_csv("cogo.csv")
+```
+
+Check out trips over 1 minute vs total number of rows. I should probably be filtering out trips under 1 minute (not really a trip, mostly just checking out the bike or error).
+
+```{r}
+cogo %>%
+  nrow()
+
+cogo %>%
+  mutate(trip_time = difftime(cogo$end_time, cogo$start_time, units = "mins")) %>%
+  filter(trip_time > 1)
+```
+
+
+# Exploratory Data Discovery
+
+When do people ride?
+
+```{r Exploratory Data Discovery}
+# Rides by Day of Week
+cogo %>% 
+  mutate(start_wday = lubridate::wday(start_time, label = TRUE)) %>%
+  ggplot(aes(start_wday, fill = usertype)) +
+  geom_bar() +
+  labs(title = "COGO Rides by Day",
+       subtitle = "Subscribers steady throughout week",
+        x = "",
+        y = "",
+        caption = "@trevin_flick")
+
+
+# Rides by time of day
+cogo %>%
+  ggplot(aes(format(as.POSIXct(start_time_round),format = "%H:%M"), fill = usertype)) +
+  geom_bar() +
+  labs(title = "COGO Rides by Time of Day",
+       subtitle = "Most rides occur in evening",
+        x = "",
+        y = "",
+        caption = "@trevin_flick") +
+    theme(axis.text.x = element_text(size=8, angle=90, face="bold"),
+        strip.text.x = element_text(size=12, face="bold"))
+
+# Rides by time of day (weekdays only)
+cogo %>%
+  filter(start_wday %in% c('Mon','Tue','Wed','Thu','Fri')) %>%
+  ggplot(aes(format(as.POSIXct(start_time_round),format = "%H:%M"), fill = usertype)) +
+  geom_bar() +
+  labs(title = "COGO Rides by Time of Day",
+       subtitle = "Most rides occur in evening",
+        x = "",
+        y = "",
+        caption = "@trevin_flick") +
+    theme(axis.text.x = element_text(size=8, angle=90, face="bold"),
+        strip.text.x = element_text(size=12, face="bold"))
+
+# Rides by time of day
+cogo_weather %>%
+  filter(year == 2020 & month > 6) %>%
+  ggplot(aes(time, fill = usertype)) +
+  geom_bar() +
+  facet_grid(~ month) +
+  labs(title = "COGO Rides 2020",
+       subtitle = "Last Four Months",
+        x = "",
+        y = "",
+        caption = "@trevin_flick") +
+  theme(axis.text.x = element_text(size=8, angle=90, face="bold"),
+        strip.text.x = element_text(size=12, face="bold"))
+```
+
+Who is likely to ride?
+
+```{r}
+cogo_weather %>%
+  mutate(age = year - birthyear) %>%
+  ggplot(aes(age)) +
+  geom_histogram() +
+  theme_fivethirtyeight() +
+  labs(title = "COGO Riders Skew Younger",
+       subtitle = "Based on total trips by subscribers",
+        x = "",
+        y = "",
+        caption = "@trevin_flick")
+
+cogo_weather %>%
+  drop_na(gender) %>%
+  filter(year > 2013 & year < 2020) %>%
+  ggplot(aes(year, fill = gender)) +
+  geom_bar() +
+  theme_fivethirtyeight() +
+  labs(title = "COGO Riders Skew Male",
+       subtitle = "Based on total trips by subscribers",
+        x = "",
+        y = "",
+        caption = "@trevin_flick")
+```
+
+Where are people riding?
+
+Are riders mostly doing A -> A trips or A -> B trips?
+
+```{r}
+# Rides by start station
+cogo_weather %>%
+  count(from_station_name, sort = TRUE)
+
+# Top trips
+cogo_weather %>%
+  mutate(trip = paste(from_station_name, "->", to_station_name)) %>%
+  count(trip, sort = TRUE)
+
+# Top A -> B trips
+cogo_weather %>%
+  mutate(trip = paste(from_station_name, "->", to_station_name)) %>%
+  filter(from_station_name != to_station_name) %>%
+  count(trip, sort = TRUE)
+
+cogo_trips <- as.tibble(cogo_weather) %>%
+  mutate(trip = paste(from_station_name, "->", to_station_name),
+         trip_type = if_else(from_station_name == to_station_name, "AA", "AB")) %>%
+  filter(!is.na(from_station_name) & !is.na(to_station_name)) %>%
+  select(from_station_name, to_station_name, trip, trip_type)
+
+cogo_trips %>%
+  count(trip_type, sort = TRUE)
+
+cogo_trips %>%
+  filter(is.na(trip_type))
+
+colSums(is.na(cogo_trips))
+
+cogo_weather %>%
+  filter(is.na(from_station_name)) %>%
+  View()
+
+
+cogo_trips %>% 
+  count(trip, trip_type) %>%
+  top_n(25) %>%
+  mutate(trip = fct_reorder(trip, n)) %>%
+  ggplot(aes(trip, n, fill = trip_type)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_manual(values = c("#F8766D", "#999999"))  +
+  labs(title = "Most popular trips",
+       subtitle = "Downtown is a popular area for COGO riders",
+        x = "",
+        y = "",
+        caption = "@trevin_flick")
+  
+
+# NA are expected, electric bikes do not need to be docked at a COGO station so start and end location may be missing
+
+cogo_weather <- cogo_weather %>%
+  separate(to_station_location, c("to_station_lat", "to_station_lon"), 
+           ",", remove = FALSE)
+
+cogo_weather <- cogo_weather %>%
+  separate(from_station_location, c("from_station_lat", "from_station_lon"), 
+           ",", remove = FALSE)
+
+cogo_weather <- cogo_weather %>%
+  mutate_at(c("to_station_lat", "to_station_lon", "from_station_lat", "from_station_lon"),
+            as.numeric)
+
+qmplot(to_station_lon, to_station_lat, data = cogo_weather, maptype = "toner-background", geom = c("point","density2d"),
+       color = I("red"))
+```
+
+How long do people ride?
+
+```{r}
+cogo_weather %>%
+  mutate(trip_time = difftime(cogo_weather$end_time, cogo_weather$start_time, units = "hours")) %>%
+  filter(trip_time > 0 & trip_time < 3) %>%
+  # filter(rideable_type == "electric_bike") %>%
+  ggplot(aes(trip_time, temp)) +
+  geom_point(alpha = 0.15)
+
+cogo_weather %>%
+  mutate(trip_time = difftime(cogo_weather$end_time, cogo_weather$start_time, units = "hours")) %>%
+  filter(trip_time > 0 & trip_time < 3) %>%
+  # filter(rideable_type == "electric_bike") %>%
+  ggplot(aes(trip_time)) +
+  geom_histogram() +
+  geom_vline(xintercept = 0.5, color = "red", size = 1.5) +
+  labs(title = "Duration of trips in hours",
+       subtitle = "Most trips are under half hour",
+        x = "",
+        y = "",
+        caption = "@trevin_flick")
+```
+
+
+
+# Number of Rides per day by Year
+
+```{r}
+cogo_weather %>%
+  mutate(start_date = as.Date(start_time)) %>%
+  ggplot(aes(x = start_date)) +
+  geom_bar(fill = "#0099ff", color = "#0099ff") +
+  theme_fivethirtyeight() +
+  labs(title = "COGO Rides by Year",
+       subtitle = "Number of rides for Columbus' bike share program",
+        x = "",
+        y = "",
+        caption = "@trevin_flick") +
+  facet_wrap(~year, ncol = 4, scales = "free_x") +
+  theme(axis.text.x = element_text(size=8, angle=90, face="bold"),
+        strip.text.x = element_text(size=12, face="bold"))
+
+```
+
+COGO introduced electric bikes to Columbus in the summer of 2020. Let's take a look at how users have responded to the new bike option.
+
+```{r}
+cogo_weather %>%
+  mutate(start_date = as.Date(start_time)) %>%
+  filter(year == 2020 & month >= 7) %>%
+  ggplot(aes(x = start_date, fill = rideable_type)) +
+  geom_bar() +
+  theme_fivethirtyeight() +
+  labs(title = "COGO Rides by Rideable Type",
+       subtitle = "Number of rides for Columbus' bike share program",
+       x = "",
+       y = "",
+       caption = "@trevin_flick") +
+  theme(axis.text.x = element_text(size=8, angle=90, face="bold"),
+        strip.text.x = element_text(size=12, face="bold"))
+```
+
+
+How does temp and weather effect rides?
+
+```{r}
+cogo_weather %>%
+  count(start_time_round, temp) %>%
+  ggplot(aes(temp, n)) +
+  geom_point(alpha = 0.3) +
+  theme_light() +
+  labs(title = "Temperature has a big impact on rides",
+       subtitle = "",
+       x = "Temp (F)",
+       y = "Rides per Hour",
+       caption = "@trevin_flick")
+```
+
+
+# Modeling!!!!
+
+```{r data prep}
+library(tis)
+
+# bring in weather data and join to bike data
+weather <- read_csv("weather.csv")
+cogo_weather <- inner_join(cogo, weather, by = c("start_time_round"="dt_est"))
+
+# count number of rides per hour
+cogo_count <- cogo_weather %>% 
+  count(start_time_round, year, month, time, temp, pressure, humidity, wind_speed, name = "trips")
+
+# data cleaning / feature engineering
+cogo_count$start_date <- as.Date(cogo_count$start_time_round)
+cogo_count$holiday <- isHoliday(cogo_count$start_date) * 1
+cogo_count$day_of_week <- tis::dayOfWeek(cogo_count$start_date)
+cogo_count$quarter <- tis::quarter(cogo_count$start_date)
+cogo_count$hour_of_day <- as.numeric(cogo_count$time) / (60 * 60)
+
+# select only variables of interest
+cogo_count <- cogo_count %>%
+  select(temp, pressure, humidity, wind_speed,
+         year, quarter, month, day_of_week, hour_of_day, holiday, trips)
+```
+
+
+```{r}
+library(tidymodels)
+library(poissonreg)
+
+set.seed(1)
+
+month_split <- cogo_count %>%
+  initial_split(strata = month)
+
+cogo_train <- training(month_split)
+cogo_test <- testing(month_split)
+
+# linear regression model
+lm_fit <- linear_reg() %>%
+  set_engine(engine = 'lm') %>%
+  fit(trips ~ .,
+    data = cogo_train
+  )
+
+# poisson regression model
+p_fit <- poisson_reg() %>%
+  set_engine(engine = 'glm') %>%
+  fit(trips ~ .,
+    data = cogo_train
+  )
+
+# random forest
+rf_fit <- rand_forest(mode = "regression") %>%
+  set_engine(engine = "ranger") %>%
+  fit(trips ~ .,
+    data = cogo_train
+  )
+```
+
+
+```{r}
+# evaluate models
+# training data
+results_train <- lm_fit %>%
+  predict(new_data = cogo_train) %>%
+  mutate(
+    truth = cogo_train$trips,
+    model = "lm"
+  ) %>%
+  bind_rows(p_fit %>%
+    predict(new_data = cogo_train) %>%
+    mutate(
+      truth = cogo_train$trips,
+      model = "poisson"
+    )) %>%
+  bind_rows(rf_fit %>%
+    predict(new_data = cogo_train) %>%
+    mutate(
+      truth = cogo_train$trips,
+      model = "rf"
+    ))
+
+results_train %>%
+  group_by(model) %>%
+  rmse(truth = truth, estimate = .pred)
+```
+
+
+
+
+```{r}
+# evaluate testing data
+
+results_test <- lm_fit %>%
+  predict(new_data = cogo_test) %>%
+  mutate(
+    truth = cogo_test$trips,
+    model = "lm"
+  ) %>%
+  bind_rows(p_fit %>%
+    predict(new_data = cogo_test) %>%
+    mutate(
+      truth = cogo_test$trips,
+      model = "poisson"
+    )) %>%
+  bind_rows(rf_fit %>%
+    predict(new_data = cogo_test) %>%
+    mutate(
+      truth = cogo_test$trips,
+      model = "rf"
+    ))
+
+results_test %>%
+  group_by(model) %>%
+  rmse(truth = truth, estimate = .pred)
+
+```
+
+
+
+
+
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
